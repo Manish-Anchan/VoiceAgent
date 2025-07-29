@@ -14,7 +14,7 @@ An interactive voice-based English tutor designed for children aged 6-12. Genie 
 
 ## 🚀 Live Demo
 
-Try Genie live at: [Your deployed URL here]
+Try Genie live at: **https://voiceagent-edjq.onrender.com/**
 
 ## 🛠️ Technology Stack
 
@@ -107,29 +107,6 @@ voice-tutor/
    - 🗑️ **Clear Button**: Reset conversation history
    - ⏹️ **Stop Button**: Stop current speech playback
 
-## 🌐 Deployment
-
-### Railway (Recommended)
-1. Push your code to GitHub
-2. Connect your repository to [Railway](https://railway.app)
-3. Add environment variables in Railway dashboard
-4. Deploy automatically
-
-### Render
-1. Connect GitHub repository to [Render](https://render.com)
-2. Set build command: `pip install -r requirements.txt`
-3. Set start command: `python main.py`
-4. Add environment variables
-
-### Heroku
-```bash
-heroku create your-app-name
-heroku config:set GROQ_API_KEY=your_key
-heroku config:set ELEVEN_API_KEY=your_key
-heroku config:set LANGSMITH_API_KEY=your_key
-git push heroku main
-```
-
 ## 🔧 Configuration
 
 ### Customize AI Behavior
@@ -207,11 +184,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Verify Groq API key is valid
 - Check internet connection
 - Review Flask server logs for errors
-
-**Deployment Issues**:
-- Ensure all environment variables are set
-- Check that `requirements.txt` includes all dependencies
-- Verify Python version compatibility
 
 ### Getting Help
 
