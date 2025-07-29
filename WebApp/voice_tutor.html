@@ -291,14 +291,48 @@
                 this.recognition.onerror = (event) => {
                     console.log('Speech recognition error:', event.error);
                     
-                    // Don't show error for common issues in continuous mode
-                    if (event.error === 'no-speech' || event.error === 'audio-capture') {
-                        this.restartListening();
-                        return;
+                    // Handle different error types
+                    switch(event.error) {
+                        case 'network':
+                            // Network errors are often temporary
+                            console.log('Network error, attempting restart...');
+                            setTimeout(() => {
+                                if (this.continuousMode) {
+                                    this.restartListening();
+                                }
+                            }, 2000);
+                            break;
+                            
+                        case 'no-speech':
+                        case 'audio-capture':
+                            // These are normal in continuous mode
+                            if (this.continuousMode) {
+                                this.restartListening();
+                                return;
+                            }
+                            break;
+                            
+                        case 'not-allowed':
+                            this.showError('Microphone access denied. Please allow microphone permissions and refresh the page.');
+                            this.continuousMode = false;
+                            break;
+                            
+                        case 'service-not-allowed':
+                            this.showError('Speech recognition service not available. Please ensure you\'re using HTTPS or localhost.');
+                            this.continuousMode = false;
+                            break;
+                            
+                        default:
+                            // For other errors, try to restart after a delay
+                            console.log(`Handling error: ${event.error}`);
+                            setTimeout(() => {
+                                if (this.continuousMode && !this.isSpeaking && !this.isProcessing) {
+                                    this.restartListening();
+                                }
+                            }, 1000);
+                            break;
                     }
                     
-                    this.showError(`Speech recognition error: ${event.error}`);
-                    this.continuousMode = false;
                     this.isListening = false;
                     this.updateUI();
                 };
@@ -335,12 +369,41 @@
                 });
             }
 
-            startContinuousListening() {
+            async checkNetworkAndPermissions() {
+                // Check network connectivity
+                if (!navigator.onLine) {
+                    this.showError('No internet connection. Please check your network.');
+                    return false;
+                }
+
+                // Check microphone permissions
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    stream.getTracks().forEach(track => track.stop()); // Stop the stream immediately
+                    return true;
+                } catch (error) {
+                    this.showError('Microphone access required. Please allow microphone permissions.');
+                    return false;
+                }
+            }
+
+            async startContinuousListening() {
                 if (!this.recognition) return;
+                
+                // Check network and permissions first
+                const canStart = await this.checkNetworkAndPermissions();
+                if (!canStart) return;
                 
                 this.continuousMode = true;
                 this.hideError();
-                this.recognition.start();
+                
+                try {
+                    this.recognition.start();
+                } catch (error) {
+                    console.log('Failed to start recognition:', error);
+                    this.showError('Failed to start speech recognition. Please try again.');
+                    this.continuousMode = false;
+                }
             }
 
             stopContinuousListening() {
@@ -357,12 +420,24 @@
             restartListening() {
                 if (!this.continuousMode || this.isSpeaking || this.isProcessing) return;
                 
-                try {
-                    this.recognition.start();
-                } catch (error) {
-                    // Recognition might already be running
-                    console.log('Recognition restart failed:', error);
-                }
+                // Add a small delay and check network
+                setTimeout(async () => {
+                    if (!navigator.onLine) {
+                        console.log('No network, delaying restart...');
+                        setTimeout(() => this.restartListening(), 5000);
+                        return;
+                    }
+                    
+                    try {
+                        this.recognition.start();
+                    } catch (error) {
+                        console.log('Recognition restart failed:', error.message);
+                        // If it fails, try again after a longer delay
+                        if (this.continuousMode) {
+                            setTimeout(() => this.restartListening(), 3000);
+                        }
+                    }
+                }, 500);
             }
 
             async handleUserInput(transcript) {
@@ -451,35 +526,73 @@
                             this.currentAudio = null;
                         }
 
-                        // Get audio from ElevenLabs TTS
-                        const response = await fetch('/api/tts', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({ text: text })
-                        });
+                        // Try ElevenLabs TTS first
+                        try {
+                            const response = await fetch('/api/tts', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({ text: text })
+                            });
 
-                        if (!response.ok) {
-                            throw new Error(`TTS error: ${response.status}`);
+                            if (response.ok) {
+                                // ElevenLabs TTS worked
+                                const audioBlob = await response.blob();
+                                const audioUrl = URL.createObjectURL(audioBlob);
+                                this.currentAudio = new Audio(audioUrl);
+
+                                this.currentAudio.onended = () => {
+                                    URL.revokeObjectURL(audioUrl);
+                                    resolve();
+                                };
+
+                                this.currentAudio.onerror = (event) => {
+                                    URL.revokeObjectURL(audioUrl);
+                                    reject(new Error('Audio playback error'));
+                                };
+
+                                await this.currentAudio.play();
+                                return; // Success, exit here
+                            } else {
+                                throw new Error(`TTS API error: ${response.status}`);
+                            }
+                        } catch (apiError) {
+                            console.log('ElevenLabs TTS failed, using browser TTS fallback:', apiError.message);
+                            
+                            // Fallback to browser TTS
+                            if (window.speechSynthesis.speaking) {
+                                window.speechSynthesis.cancel();
+                            }
+
+                            const utterance = new SpeechSynthesisUtterance(text);
+                            utterance.rate = 0.8;
+                            utterance.pitch = 1.1;
+                            utterance.volume = 1;
+
+                            // Try to use a child-friendly voice
+                            const voices = window.speechSynthesis.getVoices();
+                            const femaleVoice = voices.find(voice => 
+                                voice.name.includes('Female') || 
+                                voice.name.includes('Karen') ||
+                                voice.name.includes('Susan') ||
+                                voice.name.includes('Samantha')
+                            ) || voices.find(voice => voice.lang.startsWith('en'));
+
+                            if (femaleVoice) {
+                                utterance.voice = femaleVoice;
+                            }
+
+                            utterance.onend = () => {
+                                resolve();
+                            };
+
+                            utterance.onerror = (event) => {
+                                reject(new Error(`Browser TTS error: ${event.error}`));
+                            };
+
+                            window.speechSynthesis.speak(utterance);
                         }
-
-                        // Create audio blob and play it
-                        const audioBlob = await response.blob();
-                        const audioUrl = URL.createObjectURL(audioBlob);
-                        this.currentAudio = new Audio(audioUrl);
-
-                        this.currentAudio.onended = () => {
-                            URL.revokeObjectURL(audioUrl);
-                            resolve();
-                        };
-
-                        this.currentAudio.onerror = (event) => {
-                            URL.revokeObjectURL(audioUrl);
-                            reject(new Error('Audio playback error'));
-                        };
-
-                        await this.currentAudio.play();
 
                     } catch (error) {
                         reject(error);
@@ -488,18 +601,25 @@
             }
 
             stopSpeaking() {
+                // Stop ElevenLabs audio if playing
                 if (this.currentAudio) {
                     this.currentAudio.pause();
                     this.currentAudio = null;
-                    this.isSpeaking = false;
-                    this.updateUI();
-                    
-                    // Resume listening if in continuous mode
-                    if (this.continuousMode) {
-                        setTimeout(() => {
-                            this.restartListening();
-                        }, 500);
-                    }
+                }
+                
+                // Stop browser TTS if playing
+                if (window.speechSynthesis.speaking) {
+                    window.speechSynthesis.cancel();
+                }
+                
+                this.isSpeaking = false;
+                this.updateUI();
+                
+                // Resume listening if in continuous mode
+                if (this.continuousMode) {
+                    setTimeout(() => {
+                        this.restartListening();
+                    }, 500);
                 }
             }
 
